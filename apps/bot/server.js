@@ -57,12 +57,7 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
     try {
       const body = req.body || {};
 
-      // Only require Email; accept and forward all other fields as-is
-      const required = ["Email"]; 
-      const missing = required.filter((k) => !body[k] || String(body[k]).trim() === "");
-      if (missing.length) {
-        return res.status(400).json({ success: false, error: `Missing fields: ${missing.join(", ")}` });
-      }
+      // Accept any payload and forward; no required fields enforced
 
       // Store submission in Firestore if configured
       try {
