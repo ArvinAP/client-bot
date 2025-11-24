@@ -1,0 +1,10 @@
+{
+  "name": "@monorepo/firebase",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "type": "commonjs",
+  "dependencies": {
+    "firebase-admin": "^12.5.0"
+  }
+}

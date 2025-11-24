@@ -1,0 +1,16 @@
+{
+  "name": "discord-client-manager",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "echo \"No tests at root\"",
+    "install:all": "npm install",
+    "dev:bot": "npm run -w apps/bot start",
+    "dev:web": "npm run -w apps/web dev",
+    "build:web": "npm run -w apps/web build"
+  }
+}

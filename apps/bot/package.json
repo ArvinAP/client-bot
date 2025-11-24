@@ -1,0 +1,17 @@
+{
+  "name": "bot",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@monorepo/firebase": "file:../../packages/firebase",
+    "chrono-node": "^2.9.0",
+    "discord.js": "^14.24.2",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0"
+  }
+}
