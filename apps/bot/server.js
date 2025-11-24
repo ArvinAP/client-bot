@@ -63,10 +63,16 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
       try {
         const db = getDb();
         if (db) {
+          const q = req.query || {};
+          const incomingGuild = q.guildId || body.guildId || null;
+          const incomingChannel = q.channelId || body.channelId || null;
+          const resolvedGuild = TENANT_GUILD_ID || (incomingGuild ? String(incomingGuild) : null);
+          const resolvedChannel = TENANT_CHANNEL_ID || (incomingChannel ? String(incomingChannel) : null);
           const doc = {
             receivedAt: new Date().toISOString(),
             data: body,
-            guildId: TENANT_GUILD_ID || null,
+            guildId: resolvedGuild,
+            channelId: resolvedChannel,
           };
           await db.collection("submissions").add(doc);
         }
@@ -114,7 +120,11 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
       if (!db) return res.status(200).json({ items: [] });
 
       let col = db.collection("submissions");
-      if (TENANT_GUILD_ID) col = col.where('guildId', '==', TENANT_GUILD_ID);
+      if (TENANT_GUILD_ID) {
+        col = col.where('guildId', '==', TENANT_GUILD_ID);
+      } else if (req.query && req.query.guildId) {
+        col = col.where('guildId', '==', String(req.query.guildId));
+      }
       const snap = await col.orderBy("receivedAt", "desc").limit(50).get();
 
       const items = [];
