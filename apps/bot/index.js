@@ -358,7 +358,9 @@ client.on('interactionCreate', async (interaction) => {
       const lines = [];
       snap.forEach((d) => {
         const e = d.data();
-        lines.push(`• ${safeText(e.title)} @ ${e.startsAt}`);
+        const start = e.startsAt ? new Date(e.startsAt) : null;
+        const ts = start ? Math.floor(start.getTime() / 1000) : null;
+        lines.push(`• ${safeText(e.title)} @ ${ts?`<t:${ts}:f>`:'unknown time'}`);
       });
       return interaction.reply({ content: lines.join('\n'), ephemeral: true, allowedMentions: { parse: [] } });
     }
