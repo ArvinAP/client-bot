@@ -3,6 +3,8 @@ const { Client, GatewayIntentBits, ModalBuilder, TextInputBuilder, TextInputStyl
 const chrono = require('chrono-node');
 const { formatFormMessage } = require("./formatter");
 const { getDb } = require("../../packages/firebase");
+const TENANT_GUILD_ID = process.env.TENANT_GUILD_ID || null;
+const TENANT_CHANNEL_ID = process.env.TENANT_CHANNEL_ID || null;
 
 function safeText(s) {
   // prevent accidental mentions by inserting zero-width space after '@'
@@ -35,7 +37,9 @@ const WIZ_STEPS = [
 
 async function startWizard(inter, preset = {}) {
   const key = `${inter.guildId}:${inter.channelId}:${inter.user.id}`;
-  const base = { channelId: inter.channelId, guildId: inter.guildId, ...(preset || {}) };
+  const baseGuild = TENANT_GUILD_ID || inter.guildId;
+  const baseChannel = TENANT_CHANNEL_ID || inter.channelId;
+  const base = { channelId: baseChannel, guildId: baseGuild, ...(preset || {}) };
   const session = { step: 0, data: base, expiresAt: Date.now()+5*60_000 };
   sessions.set(key, session);
 
@@ -178,8 +182,8 @@ client.on('messageCreate', async (msg) => {
       startsAt,
       endsAt: null,
       timeZone: session.data.timeZone || null,
-      guildId: session.data.guildId,
-      channelId: session.data.channelId,
+      guildId: TENANT_GUILD_ID || session.data.guildId,
+      channelId: TENANT_CHANNEL_ID || session.data.channelId,
       mentionHere: session.data.mentionHere==='yes',
       remindOffsetMinutes: (off!==null&&!isNaN(off)?off:null),
       remindAt,
@@ -242,7 +246,7 @@ client.on('interactionCreate', async (interaction) => {
     let remindAt = null;
     const off = (remindOffset !== null && remindOffset !== undefined) ? Number(remindOffset) : (Number(process.env.REMINDER_OFFSET_MINUTES) || null);
     try { if (off !== null && !isNaN(off)) remindAt = new Date(new Date(startsAt).getTime() - off * 60_000).toISOString(); } catch {}
-    const doc = { title, description, startsAt, endsAt: null, timeZone, guildId: interaction.guildId, channelId: interaction.channelId, mentionHere: false, remindOffsetMinutes: (off!==null&&!isNaN(off)?off:null), remindAt, notifiedAt: null, createdAt: nowIso, updatedAt: nowIso };
+    const doc = { title, description, startsAt, endsAt: null, timeZone, guildId: (TENANT_GUILD_ID || interaction.guildId), channelId: (TENANT_CHANNEL_ID || interaction.channelId), mentionHere: false, remindOffsetMinutes: (off!==null&&!isNaN(off)?off:null), remindAt, notifiedAt: null, createdAt: nowIso, updatedAt: nowIso };
     const ref = await db.collection('events').add(doc);
     const descLine = description ? `\n${safeText(description)}` : '';
     return interaction.reply({ content: `Event created — ${safeText(title)} @ ${startsAt}${descLine}`, ephemeral: true });
@@ -257,7 +261,7 @@ client.login(process.env.TOKEN);
 // ---- Slash commands ----
 async function tryRegisterCommands() {
   try {
-    const guildId = process.env.GUILD_ID;
+    const guildId = process.env.GUILD_ID || TENANT_GUILD_ID;
     const commands = [
       {
         name: 'event-create',
@@ -342,8 +346,9 @@ client.on('interactionCreate', async (interaction) => {
     if (name === 'event-list') {
       const now = new Date();
       const to = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-      const snap = await db
-        .collection('events')
+      let col = db.collection('events');
+      if (TENANT_GUILD_ID) col = col.where('guildId', '==', TENANT_GUILD_ID);
+      const snap = await col
         .where('startsAt', '>=', now.toISOString())
         .where('startsAt', '<=', to.toISOString())
         .orderBy('startsAt', 'asc')
@@ -360,6 +365,10 @@ client.on('interactionCreate', async (interaction) => {
 
     if (name === 'event-delete') {
       const id = interaction.options.getString('id', true);
+      const doc = await db.collection('events').doc(id).get();
+      if (!doc.exists) return interaction.reply({ content: 'Not found', ephemeral: true });
+      const data = doc.data() || {};
+      if (TENANT_GUILD_ID && data.guildId && data.guildId !== TENANT_GUILD_ID) return interaction.reply({ content: 'Forbidden', ephemeral: true });
       await db.collection('events').doc(id).delete();
       return interaction.reply({ content: `Deleted ${id}`, ephemeral: true });
     }
@@ -370,11 +379,12 @@ client.on('interactionCreate', async (interaction) => {
       const ref = await db.collection('events').doc(id).get();
       if (!ref.exists) return interaction.reply({ content: 'Event not found', ephemeral: true });
       const ev = ref.data() || {};
+      if (TENANT_GUILD_ID && ev.guildId && ev.guildId !== TENANT_GUILD_ID) return interaction.reply({ content: 'Forbidden', ephemeral: true });
       const start = ev.startsAt ? new Date(ev.startsAt) : null;
       const ts = start ? Math.floor(start.getTime() / 1000) : null;
       const prefix = (mentionHere || ev.mentionHere || String(process.env.MENTION_HERE).toLowerCase()==='true') ? '@here ' : '';
       const descLine = ev.description ? `\n${safeText(ev.description)}` : '';
-      await sendPlainToDiscord(`${prefix}Reminder: **${safeText(ev.title || 'Event')}** at ${ts?`<t:${ts}:f>`:'unknown time'}${descLine}`, ev.channelId || interaction.channelId);
+      await sendPlainToDiscord(`${prefix}Reminder: **${safeText(ev.title || 'Event')}** at ${ts?`<t:${ts}:f>`:'unknown time'}${descLine}`, TENANT_CHANNEL_ID || ev.channelId || interaction.channelId);
       await db.collection('events').doc(id).set({ notifiedAt: new Date().toISOString() }, { merge: true });
       return interaction.reply({ content: 'Reminder sent', ephemeral: true });
     }
@@ -566,8 +576,9 @@ function tryStartReminderPoller() {
       // 1) Prefer explicit remindAt window
       const remindIsoA = now.toISOString();
       const remindIsoB = windowEnd.toISOString();
-      let snap = await db
-        .collection("events")
+      let colA = db.collection("events");
+      if (TENANT_GUILD_ID) colA = colA.where('guildId', '==', TENANT_GUILD_ID);
+      let snap = await colA
         .where("remindAt", ">=", remindIsoA)
         .where("remindAt", "<=", remindIsoB)
         .where("notifiedAt", "==", null)
@@ -575,8 +586,9 @@ function tryStartReminderPoller() {
         .get()
         .catch(async () => {
           // Fallback: without notifiedAt filter
-          return await db
-            .collection("events")
+          let colAFallback = db.collection("events");
+          if (TENANT_GUILD_ID) colAFallback = colAFallback.where('guildId', '==', TENANT_GUILD_ID);
+          return await colAFallback
             .where("remindAt", ">=", remindIsoA)
             .where("remindAt", "<=", remindIsoB)
             .limit(50)
@@ -588,16 +600,18 @@ function tryStartReminderPoller() {
         const targetStart = new Date(now.getTime() + offsetMin * 60_000);
         const startIsoA = targetStart.toISOString();
         const startIsoB = new Date(targetStart.getTime() + pollMs + 5_000).toISOString();
-        snap = await db
-          .collection("events")
+        let colB = db.collection("events");
+        if (TENANT_GUILD_ID) colB = colB.where('guildId', '==', TENANT_GUILD_ID);
+        snap = await colB
           .where("startsAt", ">=", startIsoA)
           .where("startsAt", "<=", startIsoB)
           .where("notifiedAt", "==", null)
           .limit(50)
           .get()
           .catch(async () => {
-            return await db
-              .collection("events")
+            let colBFallback = db.collection("events");
+            if (TENANT_GUILD_ID) colBFallback = colBFallback.where('guildId', '==', TENANT_GUILD_ID);
+            return await colBFallback
               .where("startsAt", ">=", startIsoA)
               .where("startsAt", "<=", startIsoB)
               .limit(50)
@@ -635,7 +649,7 @@ async function handleReminder(id, ev) {
         targetChannel = gs.exists ? (gs.data().defaultChannelId || null) : null;
       } catch {}
     }
-    await sendPlainToDiscord(content, targetChannel || process.env.TARGET_CHANNEL);
+    await sendPlainToDiscord(content, TENANT_CHANNEL_ID || targetChannel || process.env.TARGET_CHANNEL);
 
     await db.collection("events").doc(id).set({ notifiedAt: new Date().toISOString() }, { merge: true });
   } catch (err) {

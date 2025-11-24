@@ -1,6 +1,8 @@
 require("dotenv").config();
 const express = require("express");
 const { getDb } = require("../../packages/firebase");
+const TENANT_GUILD_ID = process.env.TENANT_GUILD_ID || null;
+const TENANT_CHANNEL_ID = process.env.TENANT_CHANNEL_ID || null;
 
 /**
  * Creates and starts the Express server.
@@ -30,11 +32,14 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
       const ref = await db.collection("events").doc(req.params.id).get();
       if (!ref.exists) return res.status(404).json({ error: "Not found" });
       const ev = ref.data() || {};
+      if (TENANT_GUILD_ID && ev.guildId && ev.guildId !== TENANT_GUILD_ID) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
 
       const start = ev.startsAt ? new Date(ev.startsAt) : null;
       const ts = start ? Math.floor(start.getTime() / 1000) : null;
       const title = ev.title || "Event";
-      const channelId = req.body?.channelId || ev.channelId || null;
+      const channelId = TENANT_CHANNEL_ID || req.body?.channelId || ev.channelId || null;
       const withHere = (req.body?.mentionHere === true) || !!ev.mentionHere || String(process.env.MENTION_HERE).toLowerCase() === 'true';
       const prefix = withHere ? '@here ' : '';
       const descLine = ev.description ? `\n${ev.description}` : '';
@@ -66,6 +71,7 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
           const doc = {
             receivedAt: new Date().toISOString(),
             data: body,
+            guildId: TENANT_GUILD_ID || null,
           };
           await db.collection("submissions").add(doc);
         }
@@ -73,18 +79,21 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
         console.warn("[firebase] Failed to store submission:", fbErr.message);
       }
 
-      // Determine target channel
+      // Determine target channel (tenant enforced first)
       let targetChannel = null;
       const q = req.query || {};
       const channelFromReq = q.channelId || body.channelId || null;
       const guildFromReq = q.guildId || body.guildId || null;
-      if (channelFromReq) {
+      if (TENANT_CHANNEL_ID) {
+        targetChannel = String(TENANT_CHANNEL_ID);
+      } else if (channelFromReq) {
         targetChannel = String(channelFromReq);
       } else if (guildFromReq) {
         try {
           const db = getDb();
           if (db) {
-            const gs = await db.collection('guild_settings').doc(String(guildFromReq)).get();
+            const resolvedGuild = TENANT_GUILD_ID || String(guildFromReq);
+            const gs = await db.collection('guild_settings').doc(String(resolvedGuild)).get();
             if (gs.exists && gs.data().defaultChannelId) targetChannel = gs.data().defaultChannelId;
           }
         } catch {}
@@ -109,11 +118,9 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
       const db = getDb();
       if (!db) return res.status(200).json({ items: [] });
 
-      const snap = await db
-        .collection("submissions")
-        .orderBy("receivedAt", "desc")
-        .limit(50)
-        .get();
+      let col = db.collection("submissions");
+      if (TENANT_GUILD_ID) col = col.where('guildId', '==', TENANT_GUILD_ID);
+      const snap = await col.orderBy("receivedAt", "desc").limit(50).get();
 
       const items = [];
       snap.forEach((doc) => {
@@ -173,8 +180,8 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
         startsAt: String(startsAt),
         endsAt: endsAt ? String(endsAt) : null,
         timeZone: timeZone ? String(timeZone) : null,
-        guildId: guildId || null,
-        channelId: channelId || null,
+        guildId: TENANT_GUILD_ID || guildId || null,
+        channelId: TENANT_CHANNEL_ID || channelId || null,
         mentionHere: !!mentionHere,
         remindOffsetMinutes: (offsetMin !== null && !isNaN(offsetMin)) ? offsetMin : null,
         remindAt,
@@ -265,6 +272,7 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
         timeZone: timeZone ? String(timeZone) : null,
         remindOffsetMinutes: (remindOffsetMinutes !== undefined && remindOffsetMinutes !== null) ? Number(remindOffsetMinutes) : null,
         mentionHere: !!mentionHere,
+        guildId: TENANT_GUILD_ID || null,
         createdAt: now,
         updatedAt: now,
       };
@@ -283,7 +291,9 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
       if (req.method === 'OPTIONS') return res.status(204).end();
       const db = getDb();
       if (!db) return res.status(200).json({ items: [] });
-      const snap = await db.collection('event_templates').orderBy('name', 'asc').limit(200).get();
+      let col = db.collection('event_templates');
+      if (TENANT_GUILD_ID) col = col.where('guildId', '==', TENANT_GUILD_ID);
+      const snap = await col.orderBy('name', 'asc').limit(200).get();
       const items = [];
       snap.forEach((d) => items.push({ id: d.id, ...(d.data() || {}) }));
       return res.status(200).json({ items });
@@ -345,9 +355,10 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
       const from = req.query.from ? new Date(String(req.query.from)) : new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
       const to = req.query.to ? new Date(String(req.query.to)) : new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-      // Firestore string-ordered by ISO timestamps
-      const snap = await db
-        .collection("events")
+      // Firestore string-ordered by ISO timestamps with tenant filter
+      let col = db.collection("events");
+      if (TENANT_GUILD_ID) col = col.where('guildId', '==', TENANT_GUILD_ID);
+      const snap = await col
         .where("startsAt", ">=", from.toISOString())
         .where("startsAt", "<=", to.toISOString())
         .orderBy("startsAt", "asc")
@@ -373,7 +384,9 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
       if (!db) return res.status(404).json({ error: "Not found" });
       const ref = await db.collection("events").doc(req.params.id).get();
       if (!ref.exists) return res.status(404).json({ error: "Not found" });
-      return res.status(200).json({ id: ref.id, ...(ref.data() || {}) });
+      const data = ref.data() || {};
+      if (TENANT_GUILD_ID && data.guildId && data.guildId !== TENANT_GUILD_ID) return res.status(403).json({ error: 'Forbidden' });
+      return res.status(200).json({ id: ref.id, ...data });
     } catch (err) {
       console.error("GET /events/:id error:", err.message);
       return res.status(500).json({ error: "Internal Server Error" });
@@ -395,11 +408,18 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
       });
       updates.updatedAt = new Date().toISOString();
 
+      // enforce tenant guild/channel if configured
+      if (TENANT_GUILD_ID) updates.guildId = TENANT_GUILD_ID;
+      if (TENANT_CHANNEL_ID) updates.channelId = TENANT_CHANNEL_ID;
+
       // recompute remindAt if startsAt or remindOffsetMinutes are provided
       if ("startsAt" in updates || "remindOffsetMinutes" in updates) {
         try {
           const doc = await db.collection("events").doc(req.params.id).get();
           const cur = doc.exists ? (doc.data() || {}) : {};
+          if (TENANT_GUILD_ID && cur.guildId && cur.guildId !== TENANT_GUILD_ID) {
+            return res.status(403).json({ error: 'Forbidden' });
+          }
           const startsAt = (
             ("startsAt" in updates ? updates.startsAt : cur.startsAt)
           );
@@ -434,6 +454,10 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
 
       const db = getDb();
       if (!db) return res.status(404).json({ error: "Not found" });
+      const ref = await db.collection("events").doc(req.params.id).get();
+      if (!ref.exists) return res.status(404).json({ error: 'Not found' });
+      const data = ref.data() || {};
+      if (TENANT_GUILD_ID && data.guildId && data.guildId !== TENANT_GUILD_ID) return res.status(403).json({ error: 'Forbidden' });
       await db.collection("events").doc(req.params.id).delete();
       return res.status(204).end();
     } catch (err) {
