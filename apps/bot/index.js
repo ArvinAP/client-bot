@@ -259,29 +259,33 @@ client.on('interactionCreate', async (interaction) => {
 client.login(process.env.TOKEN);
 
 // ---- Slash commands ----
+function buildCommands() {
+  return [
+    { name: 'event-list', description: 'List upcoming events' },
+    {
+      name: 'event-remind', description: 'Send a reminder now',
+      options: [
+        { name: 'id', type: 3, description: 'Event ID', required: true },
+        { name: 'mentionhere', type: 5, description: 'Ping @here', required: false },
+      ],
+    },
+    {
+      name: 'template-delete', description: 'Delete a template by ID',
+      options: [{ name: 'id', type: 3, description: 'Template ID', required: true }],
+    },
+    {
+      name: 'set-channel', description: 'Set the default channel for this server',
+      options: [ { name: 'channel', type: 7, description: 'Target text channel', required: true } ],
+    },
+    { name: 'get-channel', description: 'Show the default channel for this server' },
+    { name: 'clear-channel', description: 'Clear the default channel for this server' },
+  ];
+}
+
 async function tryRegisterCommands() {
   try {
     const guildId = process.env.GUILD_ID || TENANT_GUILD_ID;
-    const commands = [
-      { name: 'event-list', description: 'List upcoming events' },
-      {
-        name: 'event-remind', description: 'Send a reminder now',
-        options: [
-          { name: 'id', type: 3, description: 'Event ID', required: true },
-          { name: 'mentionhere', type: 5, description: 'Ping @here', required: false },
-        ],
-      },
-      {
-        name: 'template-delete', description: 'Delete a template by ID',
-        options: [{ name: 'id', type: 3, description: 'Template ID', required: true }],
-      },
-      {
-        name: 'set-channel', description: 'Set the default channel for this server',
-        options: [ { name: 'channel', type: 7, description: 'Target text channel', required: true } ],
-      },
-      { name: 'get-channel', description: 'Show the default channel for this server' },
-      { name: 'clear-channel', description: 'Clear the default channel for this server' },
-    ];
+    const commands = buildCommands();
     // Register in a configured guild (fast) and also globally (may take up to 1 hour)
     if (guildId) {
       try {
@@ -321,8 +325,33 @@ client.on('interactionCreate', async (interaction) => {
       const allowIds = idsRaw ? idsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
       const allowNames = namesRaw ? namesRaw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean) : [];
       if (allowIds.length || allowNames.length) {
-        const memberRoles = interaction.member?.roles?.cache;
-        const permitted = !!memberRoles && memberRoles.some(r => allowIds.includes(r.id) || allowNames.includes(String(r.name).toLowerCase()));
+        // Normalize member role IDs and names regardless of structure
+        let memberRoleIds = [];
+        let memberRoleNames = [];
+        const mr = interaction.member?.roles;
+        if (mr && typeof mr.cache === 'object') {
+          // GuildMemberRoleManager
+          memberRoleIds = Array.from(mr.cache.keys());
+          memberRoleNames = Array.from(mr.cache.values()).map(r => String(r.name || '').toLowerCase());
+        } else if (Array.isArray(mr)) {
+          // APIGuildMember roles: string[] of role IDs
+          memberRoleIds = mr.map(id => String(id));
+          memberRoleNames = memberRoleIds
+            .map(id => interaction.guild?.roles?.cache?.get(id))
+            .filter(Boolean)
+            .map(r => String(r.name || '').toLowerCase());
+        }
+
+        const permittedById = allowIds.length ? memberRoleIds.some(id => allowIds.includes(id)) : false;
+        const permittedByName = allowNames.length ? memberRoleNames.some(n => allowNames.includes(n)) : false;
+        const permitted = permittedById || permittedByName;
+
+        if (String(process.env.LOG_ROLE_GATE || '').toLowerCase() === 'true') {
+          try {
+            const roleNamesDbg = memberRoleNames.join(', ') || 'none';
+            console.log(`[role-gate] user=${interaction.user.id} guild=${interaction.guildId} roleIds=[${memberRoleIds.join(',')}] roleNames=[${roleNamesDbg}] allowIds=[${allowIds.join(',')}] allowNames=[${allowNames.join(',')}] permitted=${permitted}`);
+          } catch {}
+        }
         if (!permitted) {
           return interaction.reply({ content: 'You do not have permission to use this bot.', ephemeral: true });
         }
@@ -402,6 +431,24 @@ client.once("ready", () => {
   console.log(`Bot logged in as ${client.user.tag}`);
   tryStartReminderPoller();
   tryRegisterCommands();
+  try {
+    const idsRaw = String(process.env.ALLOWED_ROLE_IDS || '').trim();
+    const namesRaw = String(process.env.ALLOWED_ROLE_NAMES || '').trim();
+    const allowIds = idsRaw ? idsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const allowNames = namesRaw ? namesRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+    console.log(`[startup] role gate allowIds=[${allowIds.join(',')}] allowNames=[${allowNames.join(',')}]`);
+  } catch {}
+});
+
+// Ensure commands are updated immediately when the bot joins a new server
+client.on('guildCreate', async (guild) => {
+  try {
+    const commands = buildCommands();
+    await guild.commands.set(commands);
+    console.log(`[commands] Registered ${commands.length} commands in new guild ${guild.id}`);
+  } catch (e) {
+    console.warn('[commands] guildCreate register error:', e.message);
+  }
 });
 
 async function sendFormDataToDiscord(data, channelOverride) {
