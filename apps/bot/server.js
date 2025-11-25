@@ -3,6 +3,7 @@ const express = require("express");
 const { getDb } = require("../../packages/firebase");
 const TENANT_GUILD_ID = process.env.TENANT_GUILD_ID || null;
 const TENANT_CHANNEL_ID = process.env.TENANT_CHANNEL_ID || null;
+const API_AUDIENCE = (process.env.API_AUDIENCE || process.env.BOT_AUDIENCE || 'client').toLowerCase(); // 'client' or 'employee'
 
 /**
  * Creates and starts the Express server.
@@ -125,6 +126,20 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
       } else if (req.query && req.query.guildId) {
         col = col.where('guildId', '==', String(req.query.guildId));
       }
+
+      // Channel scoping: prefer tenant channel, else support single channelId, else up to 10 channelIds via 'in'
+      const q = req.query || {};
+      const tenantChannel = TENANT_CHANNEL_ID ? String(TENANT_CHANNEL_ID) : null;
+      const qChannelId = q.channelId ? String(q.channelId) : null;
+      const qChannelIds = q.channelIds ? String(q.channelIds).split(',').map(s => s.trim()).filter(Boolean) : [];
+
+      if (tenantChannel) {
+        col = col.where('channelId', '==', tenantChannel);
+      } else if (qChannelId) {
+        col = col.where('channelId', '==', qChannelId);
+      } else if (qChannelIds.length) {
+        col = col.where('channelId', 'in', qChannelIds.slice(0, 10));
+      }
       const snap = await col.orderBy("receivedAt", "desc").limit(50).get();
 
       const items = [];
@@ -193,6 +208,8 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
         notifiedAt: null,
         createdAt: nowIso,
         updatedAt: nowIso,
+        audience: API_AUDIENCE,
+        isCompany: (API_AUDIENCE !== 'client'),
       };
 
       // If no explicit channelId but we have a guildId, try to default from guild_settings
@@ -363,6 +380,10 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
       // Firestore string-ordered by ISO timestamps with tenant filter
       let col = db.collection("events");
       if (TENANT_GUILD_ID) col = col.where('guildId', '==', TENANT_GUILD_ID);
+      // For client audience, exclude company/internal events
+      if (API_AUDIENCE === 'client') {
+        col = col.where('isCompany', '==', false);
+      }
       const snap = await col
         .where("startsAt", ">=", from.toISOString())
         .where("startsAt", "<=", to.toISOString())
@@ -391,6 +412,8 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
       if (!ref.exists) return res.status(404).json({ error: "Not found" });
       const data = ref.data() || {};
       if (TENANT_GUILD_ID && data.guildId && data.guildId !== TENANT_GUILD_ID) return res.status(403).json({ error: 'Forbidden' });
+      // For client audience, block access to company/internal events
+      if (API_AUDIENCE === 'client' && data.isCompany === true) return res.status(404).json({ error: 'Not found' });
       return res.status(200).json({ id: ref.id, ...data });
     } catch (err) {
       console.error("GET /events/:id error:", err.message);

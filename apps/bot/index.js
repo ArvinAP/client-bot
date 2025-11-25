@@ -350,7 +350,7 @@ client.on('interactionCreate', async (interaction) => {
         const permittedByName = allowNames.length ? memberRoleNames.some(n => allowNames.includes(n)) : false;
         let permittedByPerms = false;
         try {
-          const perms = interaction.member?.permissions;
+          const perms = interaction.memberPermissions || interaction.member?.permissions;
           if (allowAdminPerm && perms && typeof perms.has === 'function') {
             permittedByPerms = perms.has(PermissionsBitField.Flags.Administrator);
           }
