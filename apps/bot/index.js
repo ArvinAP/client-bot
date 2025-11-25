@@ -1,10 +1,11 @@
 require("dotenv" ).config();
-const { Client, GatewayIntentBits, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+const { Client, GatewayIntentBits, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionsBitField } = require("discord.js");
 const chrono = require('chrono-node');
 const { formatFormMessage } = require("./formatter");
 const { getDb } = require("../../packages/firebase");
 const TENANT_GUILD_ID = process.env.TENANT_GUILD_ID || null;
 const TENANT_CHANNEL_ID = process.env.TENANT_CHANNEL_ID || null;
+const BOT_AUDIENCE = (process.env.BOT_AUDIENCE || 'client').toLowerCase(); // 'client' or 'employee'
 
 function safeText(s) {
   // prevent accidental mentions by inserting zero-width space after '@'
@@ -190,6 +191,8 @@ client.on('messageCreate', async (msg) => {
       notifiedAt: null,
       createdAt: nowIso,
       updatedAt: nowIso,
+      audience: BOT_AUDIENCE,
+      isCompany: (BOT_AUDIENCE !== 'client'),
     };
 
     // Apply template defaults if type provided
@@ -246,7 +249,7 @@ client.on('interactionCreate', async (interaction) => {
     let remindAt = null;
     const off = (remindOffset !== null && remindOffset !== undefined) ? Number(remindOffset) : (Number(process.env.REMINDER_OFFSET_MINUTES) || null);
     try { if (off !== null && !isNaN(off)) remindAt = new Date(new Date(startsAt).getTime() - off * 60_000).toISOString(); } catch {}
-    const doc = { title, description, startsAt, endsAt: null, timeZone, guildId: (TENANT_GUILD_ID || interaction.guildId), channelId: (TENANT_CHANNEL_ID || interaction.channelId), mentionHere: false, remindOffsetMinutes: (off!==null&&!isNaN(off)?off:null), remindAt, notifiedAt: null, createdAt: nowIso, updatedAt: nowIso };
+    const doc = { title, description, startsAt, endsAt: null, timeZone, guildId: (TENANT_GUILD_ID || interaction.guildId), channelId: (TENANT_CHANNEL_ID || interaction.channelId), mentionHere: false, remindOffsetMinutes: (off!==null&&!isNaN(off)?off:null), remindAt, notifiedAt: null, createdAt: nowIso, updatedAt: nowIso, audience: BOT_AUDIENCE, isCompany: (BOT_AUDIENCE !== 'client') };
     const ref = await db.collection('events').add(doc);
     const descLine = description ? `\n${safeText(description)}` : '';
     return interaction.reply({ content: `Event created — ${safeText(title)} @ ${startsAt}${descLine}`, ephemeral: true });
@@ -324,7 +327,8 @@ client.on('interactionCreate', async (interaction) => {
       const namesRaw = String(process.env.ALLOWED_ROLE_NAMES || '').trim();
       const allowIds = idsRaw ? idsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
       const allowNames = namesRaw ? namesRaw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean) : [];
-      if (allowIds.length || allowNames.length) {
+      const allowAdminPerm = String(process.env.ALLOW_PERMISSION_ADMIN || '').toLowerCase() === 'true';
+      if (allowIds.length || allowNames.length || allowAdminPerm) {
         // Normalize member role IDs and names regardless of structure
         let memberRoleIds = [];
         let memberRoleNames = [];
@@ -344,12 +348,19 @@ client.on('interactionCreate', async (interaction) => {
 
         const permittedById = allowIds.length ? memberRoleIds.some(id => allowIds.includes(id)) : false;
         const permittedByName = allowNames.length ? memberRoleNames.some(n => allowNames.includes(n)) : false;
-        const permitted = permittedById || permittedByName;
+        let permittedByPerms = false;
+        try {
+          const perms = interaction.member?.permissions;
+          if (allowAdminPerm && perms && typeof perms.has === 'function') {
+            permittedByPerms = perms.has(PermissionsBitField.Flags.Administrator);
+          }
+        } catch {}
+        const permitted = permittedByPerms || permittedById || permittedByName;
 
         if (String(process.env.LOG_ROLE_GATE || '').toLowerCase() === 'true') {
           try {
             const roleNamesDbg = memberRoleNames.join(', ') || 'none';
-            console.log(`[role-gate] user=${interaction.user.id} guild=${interaction.guildId} roleIds=[${memberRoleIds.join(',')}] roleNames=[${roleNamesDbg}] allowIds=[${allowIds.join(',')}] allowNames=[${allowNames.join(',')}] permitted=${permitted}`);
+            console.log(`[role-gate] user=${interaction.user.id} guild=${interaction.guildId} roleIds=[${memberRoleIds.join(',')}] roleNames=[${roleNamesDbg}] allowIds=[${allowIds.join(',')}] allowNames=[${allowNames.join(',')}] allowAdminPerm=${allowAdminPerm} permitted=${permitted}`);
           } catch {}
         }
         if (!permitted) {
@@ -363,6 +374,10 @@ client.on('interactionCreate', async (interaction) => {
       const to = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
       let col = db.collection('events');
       if (TENANT_GUILD_ID) col = col.where('guildId', '==', TENANT_GUILD_ID);
+      // Clients should not see company/internal events
+      if (BOT_AUDIENCE === 'client') {
+        col = col.where('isCompany', '==', false);
+      }
       const snap = await col
         .where('startsAt', '>=', now.toISOString())
         .where('startsAt', '<=', to.toISOString())
