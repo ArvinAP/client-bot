@@ -263,18 +263,7 @@ async function tryRegisterCommands() {
   try {
     const guildId = process.env.GUILD_ID || TENANT_GUILD_ID;
     const commands = [
-      {
-        name: 'event-create',
-        description: 'Start the event creation wizard',
-        options: [
-          { name: 'template', type: 3, description: 'Template name (type) to prefill', required: false },
-        ],
-      },
       { name: 'event-list', description: 'List upcoming events' },
-      {
-        name: 'event-delete', description: 'Delete an event by ID',
-        options: [{ name: 'id', type: 3, description: 'Event ID', required: true }],
-      },
       {
         name: 'event-remind', description: 'Send a reminder now',
         options: [
@@ -282,18 +271,6 @@ async function tryRegisterCommands() {
           { name: 'mentionhere', type: 5, description: 'Ping @here', required: false },
         ],
       },
-      {
-        name: 'template-create', description: 'Create an event template',
-        options: [
-          { name: 'name', type: 3, description: 'Template name (type)', required: true },
-          { name: 'title', type: 3, description: 'Default title', required: false },
-          { name: 'description', type: 3, description: 'Default description', required: false },
-          { name: 'timezone', type: 3, description: 'Default time zone label', required: false },
-          { name: 'remindoffset', type: 4, description: 'Default remind offset (min)', required: false },
-          { name: 'mentionhere', type: 5, description: 'Default @here', required: false },
-        ],
-      },
-      { name: 'template-list', description: 'List event templates' },
       {
         name: 'template-delete', description: 'Delete a template by ID',
         options: [{ name: 'id', type: 3, description: 'Template ID', required: true }],
@@ -335,13 +312,22 @@ client.on('interactionCreate', async (interaction) => {
     const db = getDb();
     if (!db) return interaction.reply({ content: 'DB unavailable', ephemeral: true });
 
-    if (name === 'event-create') {
-      await interaction.deferReply({ ephemeral: true });
-      const tpl = interaction.options.getString('template');
-      const preset = tpl ? { type: tpl } : {};
-      await startWizard(interaction, preset);
-      return;
-    }
+    // Role-based access gate (optional). Configure allowed roles via env:
+    // ALLOWED_ROLE_IDS: comma-separated role IDs
+    // ALLOWED_ROLE_NAMES: comma-separated role names (case-insensitive)
+    try {
+      const idsRaw = String(process.env.ALLOWED_ROLE_IDS || '').trim();
+      const namesRaw = String(process.env.ALLOWED_ROLE_NAMES || '').trim();
+      const allowIds = idsRaw ? idsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+      const allowNames = namesRaw ? namesRaw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean) : [];
+      if (allowIds.length || allowNames.length) {
+        const memberRoles = interaction.member?.roles?.cache;
+        const permitted = !!memberRoles && memberRoles.some(r => allowIds.includes(r.id) || allowNames.includes(String(r.name).toLowerCase()));
+        if (!permitted) {
+          return interaction.reply({ content: 'You do not have permission to use this bot.', ephemeral: true });
+        }
+      }
+    } catch {}
 
     if (name === 'event-list') {
       const now = new Date();
@@ -365,16 +351,6 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: lines.join('\n'), ephemeral: true, allowedMentions: { parse: [] } });
     }
 
-    if (name === 'event-delete') {
-      const id = interaction.options.getString('id', true);
-      const doc = await db.collection('events').doc(id).get();
-      if (!doc.exists) return interaction.reply({ content: 'Not found', ephemeral: true });
-      const data = doc.data() || {};
-      if (TENANT_GUILD_ID && data.guildId && data.guildId !== TENANT_GUILD_ID) return interaction.reply({ content: 'Forbidden', ephemeral: true });
-      await db.collection('events').doc(id).delete();
-      return interaction.reply({ content: `Deleted ${id}`, ephemeral: true });
-    }
-
     if (name === 'event-remind') {
       const id = interaction.options.getString('id', true);
       const mentionHere = interaction.options.getBoolean('mentionhere') || false;
@@ -391,41 +367,7 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: 'Reminder sent', ephemeral: true });
     }
 
-    if (name === 'template-create') {
-      const tplName = interaction.options.getString('name', true);
-      const desc = interaction.options.getString('description') || '';
-      const tz = interaction.options.getString('timezone') || null;
-      const off = interaction.options.getInteger('remindoffset');
-      const mention = interaction.options.getBoolean('mentionhere') || false;
-      const now = new Date().toISOString();
-      const doc = {
-        name: tplName,
-        lowerName: String(tplName).toLowerCase(),
-        description: desc,
-        timeZone: tz,
-        remindOffsetMinutes: (off !== null && off !== undefined) ? Number(off) : null,
-        mentionHere: !!mention,
-        createdAt: now,
-        updatedAt: now,
-      };
-      const ref = await db.collection('event_templates').add(doc);
-      return interaction.reply({ content: `Template created: ${safeText(doc.name)} (id hidden)`, ephemeral: true });
-    }
-
-    if (name === 'template-list') {
-      const snap = await db.collection('event_templates').orderBy('name', 'asc').limit(20).get();
-      if (snap.empty) return interaction.reply({ content: 'No templates', ephemeral: true });
-      const lines = [];
-      snap.forEach((d) => {
-        const t = d.data() || {};
-        const parts = [];
-        if (t.timeZone) parts.push(`TZ: ${safeText(t.timeZone)}`);
-        if (typeof t.remindOffsetMinutes === 'number') parts.push(`Offset: ${t.remindOffsetMinutes}m`);
-        if (t.mentionHere) parts.push('@here');
-        lines.push(`• ${safeText(t.name)}${parts.length ? ' — ' + parts.join(', ') : ''}`);
-      });
-      return interaction.reply({ content: lines.join('\n'), ephemeral: true, allowedMentions: { parse: [] } });
-    }
+    
 
     if (name === 'template-delete') {
       const id = interaction.options.getString('id', true);
