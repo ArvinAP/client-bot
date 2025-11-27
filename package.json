@@ -11,6 +11,7 @@
     "install:all": "npm install",
     "dev:bot": "npm run -w apps/bot start",
     "dev:web": "npm run -w apps/web dev",
-    "build:web": "npm run -w apps/web build"
+    "build:web": "npm run -w apps/web build",
+    "auth-bot": "node apps/auth-bot/index.js" 
   }
 }

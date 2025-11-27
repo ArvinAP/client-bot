@@ -273,10 +273,6 @@ function buildCommands() {
       ],
     },
     {
-      name: 'template-delete', description: 'Delete a template by ID',
-      options: [{ name: 'id', type: 3, description: 'Template ID', required: true }],
-    },
-    {
       name: 'set-channel', description: 'Set the default channel for this server',
       options: [ { name: 'channel', type: 7, description: 'Target text channel', required: true } ],
     },
@@ -412,12 +408,6 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     
-
-    if (name === 'template-delete') {
-      const id = interaction.options.getString('id', true);
-      await db.collection('event_templates').doc(id).delete();
-      return interaction.reply({ content: `Template deleted`, ephemeral: true });
-    }
 
     if (name === 'set-channel') {
       const ch = interaction.options.getChannel('channel', true);
