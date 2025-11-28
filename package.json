@@ -12,6 +12,7 @@
     "dev:bot": "npm run -w apps/bot start",
     "dev:web": "npm run -w apps/web dev",
     "build:web": "npm run -w apps/web build",
-    "auth-bot": "node apps/auth-bot/index.js" 
+    "auth-bot": "node apps/auth-bot/index.js", 
+    "dev:client-manager": "npm run -w apps/client-manager-bot start"
   }
 }
