@@ -412,7 +412,11 @@ client.on('interactionCreate', async (interaction) => {
     if (name === 'set-channel') {
       const ch = interaction.options.getChannel('channel', true);
       if (!ch || !('send' in ch)) return interaction.reply({ content: 'Please select a text channel.', ephemeral: true });
-      await db.collection('guild_settings').doc(interaction.guildId).set({ defaultChannelId: ch.id, updatedAt: new Date().toISOString() }, { merge: true });
+      await db.collection('guild_settings').doc(interaction.guildId).set({
+        defaultChannelId: ch.id,
+        defaultChannelName: ch.name || null,
+        updatedAt: new Date().toISOString(),
+      }, { merge: true });
       return interaction.reply({ content: `Default channel set to <#${ch.id}>`, ephemeral: true, allowedMentions: { parse: [] } });
     }
     if (name === 'get-channel') {
@@ -421,7 +425,11 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: id ? `Default channel: <#${id}>` : 'No default channel set.', ephemeral: true, allowedMentions: { parse: [] } });
     }
     if (name === 'clear-channel') {
-      await db.collection('guild_settings').doc(interaction.guildId).set({ defaultChannelId: null, updatedAt: new Date().toISOString() }, { merge: true });
+      await db.collection('guild_settings').doc(interaction.guildId).set({
+        defaultChannelId: null,
+        defaultChannelName: null,
+        updatedAt: new Date().toISOString(),
+      }, { merge: true });
       return interaction.reply({ content: 'Default channel cleared.', ephemeral: true });
     }
   } catch (e) {
@@ -436,13 +444,48 @@ client.once("ready", () => {
   console.log(`Bot logged in as ${client.user.tag}`);
   tryStartReminderPoller();
   tryRegisterCommands();
+  // Backfill guild names on startup
   try {
-    const idsRaw = String(process.env.ALLOWED_ROLE_IDS || '').trim();
-    const namesRaw = String(process.env.ALLOWED_ROLE_NAMES || '').trim();
-    const allowIds = idsRaw ? idsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
-    const allowNames = namesRaw ? namesRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
-    console.log(`[startup] role gate allowIds=[${allowIds.join(',')}] allowNames=[${allowNames.join(',')}]`);
+    const db = getDb();
+    if (db) {
+      client.guilds.cache.forEach(async (g) => {
+        try {
+          await db.collection('guild_settings').doc(g.id).set({
+            guildId: g.id,
+            guildName: g.name || null,
+            updatedAt: new Date().toISOString(),
+            joinedAt: new Date().toISOString(),
+          }, { merge: true });
+        } catch {}
+      });
+    }
   } catch {}
+});
+
+// Upsert guild metadata (guild name) to Firestore
+async function upsertGuildMeta(guild) {
+  try {
+    const db = getDb();
+    if (!db) return;
+    await db.collection('guild_settings').doc(guild.id).set({
+      guildId: guild.id,
+      guildName: guild.name || null,
+      updatedAt: new Date().toISOString(),
+      joinedAt: new Date().toISOString(),
+    }, { merge: true });
+  } catch (e) {
+    console.warn('[guild-meta] upsert error:', e.message);
+  }
+}
+
+// Persist guild name when the bot joins a new server
+client.on('guildCreate', async (guild) => {
+  await upsertGuildMeta(guild);
+});
+
+// Keep guild name updated when server details change
+client.on('guildUpdate', async (_oldGuild, newGuild) => {
+  await upsertGuildMeta(newGuild);
 });
 
 // Ensure commands are updated immediately when the bot joins a new server
