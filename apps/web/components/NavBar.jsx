@@ -5,6 +5,7 @@ export default function NavBar() {
         <a href="/" style={{ textDecoration: 'none', color: '#0366d6' }}>Dashboard</a>
         <a href="/calendar" style={{ textDecoration: 'none', color: '#0366d6' }}>Calendar</a>
         <a href="/templates" style={{ textDecoration: 'none', color: '#0366d6' }}>Templates</a>
+        <a href="/server" style={{ textDecoration: 'none', color: '#0366d6' }}>Servers</a>
       </nav>
     </header>
   );

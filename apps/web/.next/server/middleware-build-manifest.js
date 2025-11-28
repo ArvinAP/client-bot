@@ -29,6 +29,11 @@ self.__BUILD_MANIFEST = {
       "static/chunks/main.js",
       "static/chunks/pages/calendar.js"
     ],
+    "/server": [
+      "static/chunks/webpack.js",
+      "static/chunks/main.js",
+      "static/chunks/pages/server.js"
+    ],
     "/templates": [
       "static/chunks/webpack.js",
       "static/chunks/main.js",

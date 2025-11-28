@@ -22,6 +22,61 @@ function createServer(sendFormDataToDiscord, sendPlainToDiscord) {
     next();
   });
 
+  // ------ Guild settings (web-admin) ------
+  // List guilds (id, name, default channel, isClient)
+  app.get('/guilds', async (req, res) => {
+    try {
+      setCors(res);
+      if (req.method === 'OPTIONS') return res.status(204).end();
+      const db = getDb();
+      if (!db) return res.status(200).json({ items: [] });
+      let col = db.collection('guild_settings');
+      if (TENANT_GUILD_ID) col = col.where('guildId', '==', TENANT_GUILD_ID);
+      const snap = await col.limit(200).get();
+      const items = [];
+      snap.forEach((d) => {
+        const x = d.data() || {};
+        items.push({
+          id: d.id,
+          guildId: x.guildId || d.id,
+          guildName: x.guildName || null,
+          defaultChannelId: x.defaultChannelId || null,
+          defaultChannelName: x.defaultChannelName || null,
+          isClient: !!x.isClient,
+          updatedAt: x.updatedAt || null,
+        });
+      });
+      return res.status(200).json({ items });
+    } catch (err) {
+      console.error('GET /guilds error:', err.message);
+      return res.status(500).json({ items: [], error: 'Internal Server Error' });
+    }
+  });
+
+  // Set client status for a guild (web-admin). Body: { enabled: boolean, updatedBy?: string }
+  app.put('/guilds/:id/client', async (req, res) => {
+    try {
+      setCors(res);
+      if (req.method === 'OPTIONS') return res.status(204).end();
+      const db = getDb();
+      if (!db) return res.status(404).json({ error: 'Not found' });
+      const enabled = !!(req.body && (req.body.enabled === true || req.body.enabled === 'true'));
+      const updatedBy = (req.body && req.body.updatedBy) ? String(req.body.updatedBy) : null;
+      const gid = String(req.params.id);
+      if (TENANT_GUILD_ID && gid !== String(TENANT_GUILD_ID)) return res.status(403).json({ error: 'Forbidden' });
+      await db.collection('guild_settings').doc(gid).set({
+        isClient: enabled,
+        updatedAt: new Date().toISOString(),
+        updatedBy: updatedBy,
+      }, { merge: true });
+      const doc = await db.collection('guild_settings').doc(gid).get();
+      return res.status(200).json({ id: doc.id, ...(doc.data() || {}) });
+    } catch (err) {
+      console.error('PUT /guilds/:id/client error:', err.message);
+      return res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
   // Remind now for a specific event
   app.post("/events/:id/remind", async (req, res) => {
     try {

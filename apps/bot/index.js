@@ -278,6 +278,7 @@ function buildCommands() {
     },
     { name: 'get-channel', description: 'Show the default channel for this server' },
     { name: 'clear-channel', description: 'Clear the default channel for this server' },
+    { name: 'client-status', description: 'Show whether this server is marked as a client' },
   ];
 }
 
@@ -432,6 +433,15 @@ client.on('interactionCreate', async (interaction) => {
       }, { merge: true });
       return interaction.reply({ content: 'Default channel cleared.', ephemeral: true });
     }
+
+    if (name === 'client-status') {
+      const doc = await db.collection('guild_settings').doc(interaction.guildId).get();
+      const isClient = doc.exists ? !!doc.data().isClient : false;
+      const guildName = doc.exists ? (doc.data().guildName || interaction.guild?.name || 'this server') : (interaction.guild?.name || 'this server');
+      return interaction.reply({ content: `${guildName} is ${isClient ? 'ENABLED as a client' : 'NOT a client'}.`, ephemeral: true });
+    }
+
+    // client-set is web-only: no Discord handler
   } catch (e) {
     console.warn('[commands] handler error:', e.message);
     if (interaction.isRepliable()) {
